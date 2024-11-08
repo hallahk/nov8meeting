@@ -1,0 +1,355 @@
+#Elizabeth Blake and Daoming Liu
+#Last Updated: 10/16/2024
+#Goal: preparing survey data for analysis
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,  # Suppresses messages
+  warning = FALSE,  # Suppresses warnings
+  error = FALSE     # Prevents errors from stopping the knit process
+)
+```
+
+```{r}
+####install and load libraries#### 
+if(!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(readr, dplyr, tidyr, stringr, purrr, lubridate, snakecase, ggplot2, ggthemes,rlang, ggmap, sf, tigris, tidyverse, ggnewscale, gridExtra, readxl, survey, gtsummary, MASS, knitr)
+```
+
+```{r}
+####load survey data####
+
+# read in survey data
+tx <- read_csv("/projects/casey-cohort/projects/tx_uogd/data/qc_west_texas_clean.csv") # 1050 survey responses
+
+# load in tigris boundaries 
+texascounties <- counties(state = "Texas") %>% 
+  st_transform(texascounties, crs = "ESRI:102003")
+```
+
+```{r}
+####prep data####
+
+# using lat lon information to turn df into sf based on respondents IP address
+tx <- tx %>%
+  st_as_sf(coords = c("LocationLongitude", "LocationLatitude"), 
+           crs = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+tx <- st_transform(tx, crs = "ESRI:102003")
+
+# remove qc flags, rename variables, and mutate variable formats to factor
+tx <- tx %>% 
+  filter(`Quality Control` %in% c("Good.", "Fine.") | is.na(`Quality Control`)) %>% #1023 responses (dropped) 
+  rename("gender" = "Q1",
+         "age" = "Q2",
+         "education" = "Q3",
+         "race" = "Q4",
+         "employment" = "Q7A",
+         "health_status" = "Q26") %>%
+  filter(!gender %in% c("Gender not listed above")) %>% #1017 (dropped 6)
+  mutate(
+      female = as.factor(ifelse(gender == "Woman", 1, 0)),
+      age_levels = factor(case_when(
+        age == "25-34" ~ "level 1: 25-34",
+        age == "35-44" ~ "level 2: 35-44",
+        age == "55-64" ~ "level 3: 55-64",
+        age == "45-54" ~ "level 4: 45-54",
+        age == "18-24" ~ "level 5: 18-24",
+        age == "65 or older" ~ "level 6: 65 or older",
+        TRUE ~ NA_character_)),
+      race_cat = factor(case_when(
+        race == "White or Caucasian" ~ "1.white",
+        race == "Hispanic or Latino" ~ "2.hispanic",
+        race == "Black or African American" ~ "3.black",
+        TRUE ~ "4.else")),
+      employment = as.factor(employment))
+ 
+# filter data to only include people who took the survey in TX 
+txIP <- st_intersection(tx, texascounties) #964 (dropped 53)
+
+# address missing county information and change west_texas county definition to include additional counties
+txIP <- txIP %>% 
+  mutate(county = case_when(
+              str_detect(county, "Other county") ~ NAME,
+              TRUE ~ county)) %>% # when "Other county" in county col replace with the NAME which is county defined by ip address # #of dropped 
+  mutate(quota = case_when(
+                str_detect(county, "El Paso|Val Verde|Tom Green|Lubbock|Dickens|Hale") ~ "west_texas",
+                TRUE ~ quota)) %>% 
+  rename("location" = "quota") %>% 
+  mutate(quota = case_when(
+    location == "west_texas" ~ 1,
+    location == "genpop_texas"  ~ 0))
+```
+
+```{r}
+####K6 scale####
+  
+# assign levels to scale answers (i.e., 0 for "none of the time"; 1 for "a little of the time"; 2 for "some of the time"; 3 for "most of the time"; and 4 for "all of the time")
+txIP <- txIP %>% 
+  mutate_at(
+    vars(one_of("Q28A", "Q28B", "Q28C", "Q28D", "Q28E", "Q28F")),
+    funs(case_when(
+    . == "None" ~ 0,
+    . == "A little" ~ 1,
+    . == "Some" ~ 2,
+    . == "Most" ~ 3,
+    . == "All" ~ 4)))
+  
+# create total K6 score col
+txIP$k6sums <- NA
+
+# calculate scores and ignore the missing values (basically missing values = 0)
+txIP <- txIP %>%
+  mutate(k6sums = rowSums(across(c(Q28A, Q28B, Q28C, Q28D, Q28E, Q28F)), na.rm = TRUE))
+
+# create a character variable for depression based on K6 cut offs
+txIP$mental_illness <- if_else(txIP$k6sums >= 13, 1, 0)
+
+# turn outcome (depression) variables into factors
+txIP$mental_illness <- as_factor(txIP$mental_illness)
+```
+
+```{r}
+####EDS####
+
+# assign levels to EDS answers to sum scores for each subscale (perceived threat, felt impact, and solastalgia)
+
+# perceived threat
+txIP <- txIP %>% 
+  mutate_at(
+    vars(one_of("Q23_1", "Q23_2", "Q23_3", "Q23_4", "Q23_5", "Q23_6", "Q23_7", "Q23_8", "Q23_9", "Q23_10", "Q23_11", "Q23_12", "Q23_13", "Q23_14", "Q23_15", "Q23_16", "Q23_17", "Q23_18")),
+    funs(case_when(
+    . == "Does not apply" ~ 0,
+    . == "Unsure" ~ 0,
+    . == "No threat" ~ 1,
+    . == "Low threat" ~ 2,
+    . == "Moderate threat" ~ 3,
+    . == "Strong threat" ~ 4,
+    . == "Extreme threat" ~ 5)))
+
+# felt impact
+txIP <- txIP %>% 
+  mutate_at(
+    vars(one_of("Q24_1", "Q24_2", "Q24_3", "Q24_4", "Q24_5", "Q24_6", "Q24_7", "Q24_8", "Q24_9", "Q24_10", "Q24_11", "Q24_12", "Q24_13", "Q24_14", "Q24_15", "Q24_16", "Q24_17", "Q24_18", "Q24_19", "Q24_20", "Q24_21", "Q24_22", "Q24_23")),
+    funs(case_when(
+    . == "Does not apply" ~ 0,
+    . == "Strongly disagree" ~ 1,
+    . == "Disagree" ~ 2,
+    . == "Neither agree nor disagree" ~ 3,
+    . == "Agree" ~ 4,
+    . == "Strongly agree" ~ 5)))
+
+# solastalgia 
+txIP <- txIP %>% 
+  mutate_at(
+    vars(one_of("Q25_1", "Q25_2", "Q25_3", "Q25_4", "Q25_5", "Q25_6", "Q25_7", "Q25_8", "Q25_9")),
+    funs(case_when(
+    . == "Does not apply" ~ 0,
+    . == "Strongly disagree" ~ 1,
+    . == "Disagree" ~ 2,
+    . == "Neither agree nor disagree" ~ 3,
+    . == "Agree" ~ 4,
+    . == "Strongly agree" ~ 5)))
+
+# create empty sum cols
+txIP$threat_sum <- NA
+txIP$feltimpact_sum <- NA
+txIP$solastalgia_sum <- NA
+
+# sum for each subscale
+txIP <- txIP %>%
+  mutate(threat_sum = rowSums(across(c("Q23_1", "Q23_2", "Q23_3", "Q23_4", "Q23_5", "Q23_6", "Q23_7", "Q23_8", "Q23_9", "Q23_10", "Q23_11", "Q23_12", "Q23_13", "Q23_14", "Q23_15", "Q23_16", "Q23_17", "Q23_18")), na.rm = TRUE)) %>% #18Qs --> max score 90
+  mutate(feltimpact_sum = rowSums(across(c("Q24_1", "Q24_2", "Q24_3", "Q24_4", "Q24_5", "Q24_6", "Q24_7", "Q24_8", "Q24_9", "Q24_10", "Q24_11", "Q24_12", "Q24_13", "Q24_14", "Q24_15", "Q24_16", "Q24_17", "Q24_18", "Q24_19", "Q24_20", "Q24_21", "Q24_22", "Q24_23")), na.rm = TRUE)) %>% #23Qs --> max score 115
+  mutate(solastalgia_sum = rowSums(across(c("Q25_1", "Q25_2", "Q25_3", "Q25_4", "Q25_5", "Q25_6", "Q25_7", "Q25_8", "Q25_9")), na.rm = TRUE)) #9Qs --> max score 45
+```
+
+```{r}
+#### get urban rural variable#####
+
+# read in UIC
+uic <- read_excel("/projects/casey-cohort/projects/tx_uogd/data/UrbanInfluenceCodes2013.xls")
+
+# find the UIC for TX
+uic_tx<-uic%>%filter(State=="TX")
+
+# clean up the county names in uic_TX so that its format matches with the county names in tx
+uic_tx$NAME<-sub(" County", "",uic_tx$County_Name)
+
+# merge to get county urbanity level
+txIP <- left_join(txIP, uic_tx, by = c("county" = "NAME"))
+
+# assign rural or urban based on codes
+txIP$metro_uic <- ifelse(txIP$UIC_2013 %in% c(1, 2), "urban", "rural")
+
+# remove unnecessary dfs
+rm(uic, uic_tx)
+```
+
+```{r}
+####create new df based on respondants' listed county of residence (not based on IP)####
+
+# remove the geo-spatial information
+txCounty <- st_drop_geometry(txIP)
+
+# get county geometry for each respondent based on their recorded county
+txCounty <- left_join(txCounty, texascounties, by=c("county" = "NAME")) 
+
+# clean county df 
+txCounty <- txCounty %>% 
+   dplyr::select(c(IPAddress, ResponseId, gender, female, age, age_levels, education, race, race_cat, Q6, employment, county, location, quota, metro_uic, health_status, k6sums, mental_illness, threat_sum, feltimpact_sum, solastalgia_sum, geometry))
+```
+
+```{r}
+####cleaning IP df####
+
+# select only necessary cols in IP df 
+txIP <- txIP %>% 
+  dplyr::select(c(IPAddress, ResponseId, gender, female, age, age_levels, education, race, race_cat, Q6, employment, county, NAME, location, quota, metro_uic, health_status, k6sums, mental_illness, threat_sum, feltimpact_sum, solastalgia_sum, geometry))
+```
+
+```{r}
+####clean and prep pop data for weights####
+
+# load in permian_basin csv 
+permian_basin <- read_csv("/projects/casey-cohort/projects/tx_uogd/data/permian_basin/permian_basin.csv")
+
+# load in population file
+pop_estimates <- read_excel("/projects/casey-cohort/projects/tx_uogd/data/pop/popestimates2022.xlsx")
+pop_estimates$`Geographic Area`<- sub("\\.([A-Za-z]+).*", "\\1", pop_estimates$`Geographic Area`)
+
+# filter out the permian counties, sum up the population, and divide by total population
+permian_population<-pop_estimates[pop_estimates$`Geographic Area` %in% permian_basin$NAME, c(1,4)]
+permian_population_perc<-round(sum(permian_population$`2021`)/pop_estimates$`2021`[1] * 100, 4)
+
+# filter out the non permian counties, and do the same
+non_permian_population<-pop_estimates[!(pop_estimates$`Geographic Area` %in% permian_basin$NAME) & pop_estimates$`Geographic Area`!="Texas", c(1,4)]
+non_permian_population_perc<-round(sum(non_permian_population$`2021`)/pop_estimates$`2021`[1] * 100, 4)
+```
+
+```{r}
+####create weights for txCounty####
+
+# count the percentage of permian from tx
+county_permian_sample <- sum(str_detect(txCounty$location, "west_texas"))
+county_permian_sample_perc <- round(county_permian_sample / nrow(txCounty) * 100, 4)
+
+# count the percentage of not permian from tx
+county_non_permian_sample <- sum(str_detect(txCounty$location, "genpop_texas"))
+county_non_permian_sample_perc <- round(county_non_permian_sample / nrow(txCounty) * 100, 4)
+
+# calculate Permian weight
+county_permian_weight=permian_population_perc/county_permian_sample_perc
+
+# calculate non-Permian weight
+county_non_permian_weight=non_permian_population_perc/county_non_permian_sample_perc
+
+# add weights back to the data frame based on permian
+txCounty$weights <- county_non_permian_weight
+txCounty <- txCounty %>% 
+  mutate(weights = case_when(
+    str_detect(location, "west_texas") ~ county_permian_weight,
+    TRUE ~ weights))
+
+# add weights the ip data frame based on permian
+txIP$weights <- county_non_permian_weight
+txIP <- txIP %>% 
+  mutate(weights = case_when(
+    str_detect(location, "west_texas") ~ county_permian_weight,
+    TRUE ~ weights))
+```
+
+```{r}
+####load in exposure related datasets####
+
+# read in well data
+wells <- read_csv("/projects/casey-cohort/projects/tx_uogd/data/exposures/US_Wells.csv") #oil well records
+
+limit <- as.Date("19Apr2020", format = "%d%b%Y")
+limit_end <- as.Date("19Apr2021", format = "%d%b%Y")
+
+wells <- wells %>%
+  mutate(Last_Prod_Date = as.Date(Last_Prod_Date, format = "%d%b%Y"),
+         earliest_date = as.Date(earliest_date, format = "%d%b%Y")) %>%
+  filter(is.na(Last_Prod_Date) | Last_Prod_Date > limit,
+         earliest_date < limit_end) %>%
+  st_as_sf(coords = c("Longitude", "Latitude"), crs = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0") %>%
+  st_transform(crs = "ESRI:102003")
+
+# read in earthquake data 
+quakes <- read_csv("/projects/casey-cohort/projects/tx_uogd/data/exposures/tx_quakes_april_2020_april_2021.csv")
+
+quakes <- quakes %>%
+  st_as_sf(coords = c("longitude", "latitude"), 
+           crs = "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0") %>% 
+  st_transform(crs="ESRI:102003") %>%
+  filter(mag >= 3) #filter for quakes that were at least magnitude 3
+
+# standardize the time variables in both quakes and ip data frames.
+quakes$time=as.Date(quakes$time)
+```
+
+```{r}
+####ip level variables (wells and quake in 2 weeks)####
+
+##IP wells variable##
+
+# set a buffer distance (5 kilometers)
+wells_buffer_distance <- 5000  # in meters
+
+# create a 5 km buffer zone for each individual IP
+txIP_w_well_buffer <- st_buffer(txIP, dist = wells_buffer_distance)
+
+# count the number of wells intersecting each IP, i.e. the number of wells located within each IP buffer
+txIP$wells_count<-lengths(st_intersects(txIP_w_well_buffer, wells))
+
+# create ip level binary variables
+txIP <- txIP %>%
+  mutate(wells_bi = case_when(wells_count > 0 ~ 1,
+                                      TRUE ~ 0))
+
+##IP earthquakes two weeks variable##
+
+# filter quakes two weeks prior to each respondent's survey period
+quakes_2weeks <- quakes %>% 
+  filter(time > as.Date("2021-04-04"))
+
+# set a buffer distance (100 kilometers)
+quake_buffer_distance <- 100000  # in meters
+
+# create a 100 km buffer zone for each individual IP
+txIP_w_buffered_quakes <- st_buffer(txIP, dist = quake_buffer_distance)
+
+# count the number of earthquakes intersecting each IP
+txIP$quakes_2weeks_count <-lengths(st_intersects(txIP_w_buffered_quakes, quakes_2weeks))
+
+# create ip level binary variable
+txIP <- txIP %>%
+  mutate(quakes_2weeks_bi = case_when(quakes_2weeks_count > 0 ~ 1,
+                                      TRUE ~ 0))
+```
+
+```{r}
+#####county level 1 year earthquake variable####
+
+# make county spatial
+txCounty <- st_as_sf(txCounty)
+
+# create a 100 km buffer zone for each individual IP
+txCounty_w_buffered_quakes <- st_buffer(txCounty, dist = quake_buffer_distance)
+
+# count the number of quakes epicenters intersecting each IP
+txCounty$quakes_year_count <-lengths(st_intersects(txCounty_w_buffered_quakes, quakes))
+
+#creating a binary variable 
+txCounty <- txCounty %>%
+  mutate(quakes_year_bi = case_when(quakes_year_count > 0 ~ 1,
+                              TRUE ~ 0)) 
+```
+
+```{r}
+####save the main data frames for analysis####
+write_csv(txIP, "/projects/casey-cohort/projects/tx_uogd/data/processed/txIP.csv") 
+write_csv(txCounty, "/projects/casey-cohort/projects/tx_uogd/data/processed/txCounty.csv")
+
+write_csv(txIP, "/projects/casey-cohort/projects/tx_uogd/texas_uogd/processed_data/txIP.csv") 
+write_csv(txCounty, "/projects/casey-cohort/projects/tx_uogd/texas_uogd/processed_data/txCounty.csv")
+```
