@@ -203,7 +203,7 @@ txCounty <- txCounty %>%
 
 # select only necessary cols in IP df 
 txIP <- txIP %>% 
-  dplyr::select(c(IPAddress, ResponseId, gender, female, age, age_levels, education, race, race_cat, Q6, employment, county, NAME, location, quota, metro_uic, health_status, k6sums, mental_illness, threat_sum, feltimpact_sum, solastalgia_sum, elizabethslays, geometry))
+  dplyr::select(c(IPAddress, gender, female, age, age_levels, education, race, race_cat, Q6, employment, county, NAME, location, quota, metro_uic, health_status, k6sums, mental_illness, threat_sum, feltimpact_sum, solastalgia_sum, geometry))
 ```
 
 ```{r}
