@@ -1,6 +1,24 @@
 ########################################################################################################################
 #INSTALL LIBRARY PACKAGES
-
+library(ggplot2)
+library(summarytools)
+library(corrplot)
+library(tidyverse)
+library(lubridate)
+library(questionr)
+library(FactoMineR)
+library(factoextra)
+library(survey)
+library(forcats)
+library(finalfit)
+library(ggExtra)
+library(ggpubr)
+library(viridis)
+library(jtools)
+library(survey)
+library(tidyr)
+library(dplyr)
+library(foreign)
 install.packages("gnm")
 no
 library(gnm)
